@@ -171,9 +171,9 @@ EOF;
         success: function(data) {
             if (data !== "-1"){
                 mdui.snackbar({
-                    message: '恢复备份成功，操作码:' + data +',正在刷新页面……',
-                    position: 'bottom'
-                });
+                message: '恢复备份成功，操作码:' + data +',正在刷新页面……',
+                position: 'bottom'
+            });
                 setTimeout(function (){
                     location.reload();
                 },1000);
@@ -202,6 +202,7 @@ EOF;
                 'serverchan' => '启用Server酱',
                 'qmsg' => '启用Qmsg酱',
                 'mail' => '启用邮件',
+                'msgraph' => '启用Microsoft Graph邮件',
                 'updatetip' => '启用更新提示',
             ),
             array('updatetip'), '插件设置', _t('请选择您要启用的通知方式。<br/>' .
@@ -330,6 +331,13 @@ EOF;
             Utils\Helper::options()->title, _t('发信人名称'), _t('默认为站点标题'));
         $form->addInput($from_name);
 
+        $form->addItem(new Typecho\Widget\Helper\Layout('/div'));
+        $form->addItem(new Typecho\Widget\Helper\Layout('/div'));
+    }
+
+    public static function EmailSettings(Typecho\Widget\Helper\Form $form)
+    {
+        $form->addItem(new MDTitle('邮件通知内容配置', '适用于 SMTP 和 Microsoft Graph', false));
 
         $titleForOwner = new MDText('titleForOwner', null,
             "[{title}] 一文有新的评论", _t('博主接收邮件标题'));
@@ -345,6 +353,65 @@ EOF;
 
         $form->addItem(new Typecho\Widget\Helper\Layout('/div'));
         $form->addItem(new Typecho\Widget\Helper\Layout('/div'));
+    }
+
+
+    public static function MicrosoftGraph(Typecho\Widget\Helper\Form $form)
+    {
+        $form->addItem(new MDTitle('Microsoft Graph API 配置', '使用 Microsoft Entra ID 应用发送邮件', false));
+        
+        // 租户 ID
+        $tenantId = new MDText('msgraphTenantId', NULL, NULL, 
+            _t('租户 ID (Tenant ID)'),
+            _t('Microsoft Entra ID 中的租户 ID'));
+        $form->addInput($tenantId);
+        
+        // 客户端 ID
+        $clientId = new MDText('msgraphClientId', NULL, NULL, 
+            _t('客户端 ID (Client ID)'),
+            _t('注册应用程序的客户端 ID'));
+        $form->addInput($clientId);
+        
+        // 客户端密钥
+        $clientSecret = new MDText('msgraphClientSecret', NULL, NULL, 
+            _t('客户端密钥 (Client Secret)'),
+            _t('应用程序的客户端密钥（请妥善保管）'));
+        $form->addInput($clientSecret);
+        
+        // 发件人邮箱
+        $senderEmail = new MDText('msgraphSenderEmail', NULL, NULL, 
+            _t('发件人邮箱'),
+            _t('用于发送邮件的用户邮箱地址，该用户需要是租户的正式成员并拥有有效邮箱'));
+        $form->addInput($senderEmail->addRule('email', _t('请输入正确的邮箱地址')));
+        
+        // 发件人名称
+        $senderName = new MDText('msgraphSenderName', NULL, 
+            Utils\Helper::options()->title, 
+            _t('发件人名称'), 
+            _t('默认为站点标题'));
+        $form->addInput($senderName);
+        
+        $form->addItem(new Typecho\Widget\Helper\Layout('/div'));
+        $form->addItem(new Typecho\Widget\Helper\Layout('/div'));
+    }
+
+    public static function checkMicrosoftGraph(array $settings)
+    {
+        if (in_array('msgraph', $settings['setting'])) {
+            if (empty($settings['msgraphTenantId'])) {
+                return _t('请填写 Microsoft Graph 租户 ID');
+            }
+            if (empty($settings['msgraphClientId'])) {
+                return _t('请填写 Microsoft Graph 客户端 ID');
+            }
+            if (empty($settings['msgraphClientSecret'])) {
+                return _t('请填写 Microsoft Graph 客户端密钥');
+            }
+            if (empty($settings['msgraphSenderEmail'])) {
+                return _t('请填写 Microsoft Graph 发件人邮箱');
+            }
+        }
+        return '';
     }
 
     public static function checkSMTP(array $settings)
@@ -367,13 +434,6 @@ EOF;
             if (empty($settings['from'])) {
                 return _t('请填写发信人邮箱');
             }
-
-            if (empty($settings['titleForOwner'])) {
-                return _t('请填写博主接收邮件标题');
-            }
-            if (empty($settings['titleForGuest'])) {
-                return _t('请填写访客接收邮件标题');
-            }
         }
         return '';
     }
@@ -390,6 +450,31 @@ EOF;
         $s = self::checkSMTP($settings);
         if ($s != '')
             return $s;
+
+        $s = self::checkMicrosoftGraph($settings);
+        if ($s != '')
+            return $s;
+        
+        $s = self::checkEmailSettings($settings);
+        if ($s != '')
+            return $s;
+            
+        return '';
+    }
+
+    public static function checkEmailSettings(array $settings)
+    {
+        if (in_array('mail', $settings['setting']) || in_array('msgraph', $settings['setting'])) {
+            if (empty($settings['titleForOwner'])) {
+                return _t('请填写博主接收邮件标题');
+            }
+            if (empty($settings['titleForGuest'])) {
+                return _t('请填写访客接收邮件标题');
+            }
+            if (empty($settings['titleForApproved'])) {
+                return _t('请填写审核通过邮件标题');
+            }
+        }
         return '';
     }
 }

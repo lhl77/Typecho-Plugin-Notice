@@ -12,6 +12,9 @@ require_once "libs/FormElement/MDFormElements.php";
 require_once "libs/phpmailer/PHPMailer.php";
 require_once "libs/phpmailer/Exception.php";
 require_once "libs/phpmailer/SMTP.php";
+require_once "libs/phpmailer/SMTP.php";
+
+
 
 use Typecho;
 use Typecho\Plugin\PluginInterface;
@@ -82,7 +85,10 @@ class Plugin implements PluginInterface
         Typecho\Plugin::factory('Widget_Service')->sendSC = __CLASS__ . '::sendSC';
         Typecho\Plugin::factory('Widget_Service')->sendQmsg = __CLASS__ . '::sendQmsg';
         Typecho\Plugin::factory('Widget_Service')->sendMail = __CLASS__ . '::sendMail';
+        Typecho\Plugin::factory('Widget_Service')->sendMSGraphMail = __CLASS__ . '::sendMSGraphMail';
         Typecho\Plugin::factory('Widget_Service')->sendApprovedMail = __CLASS__ . '::sendApprovedMail';
+        Typecho\Plugin::factory('Widget_Service')->sendApprovedMSGraphMail = __CLASS__ . '::sendApprovedMSGraphMail';
+
 
         Utils\Helper::addAction(self::$action_setting, 'TypechoPlugin\Notice\libs\SettingAction');
         Utils\Helper::addAction(self::$action_test, 'TypechoPlugin\Notice\libs\TestAction');
@@ -163,6 +169,12 @@ class Plugin implements PluginInterface
 
             // SMTP
             libs\Config::SMTP($form);
+
+            // Microsoft Graph
+            libs\Config::MicrosoftGraph($form);
+
+            // Email Settings (Shared)
+            libs\Config::EmailSettings($form);
         }
         $form->addItem(new Typecho\Widget\Helper\Layout('/div'));
         // 美化提交按钮
@@ -213,6 +225,10 @@ class Plugin implements PluginInterface
             libs\DB::log($comment->coid, "log", "调用发送邮件异步");
             self::sendMail($comment->coid);
         }
+        if (in_array('msgraph', $options->setting) && !empty($options->msgraphClientId)) {
+            libs\DB::log($comment->coid, "log", "调用Microsoft Graph发送邮件异步");
+            self::sendMSGraphMail($comment->coid);
+        }
         if (in_array('serverchan', $options->setting) && !empty($options->scKey)) {
             libs\DB::log($comment->coid, "log", "调用Server酱异步");
             self::sendSC($comment->coid);
@@ -239,6 +255,7 @@ class Plugin implements PluginInterface
         libs\DB::log($comment['coid'], '评论通过异步请求开始', '');
         if ('approved' === $status) {
             self::sendApprovedMail($comment['coid']);
+            self::sendApprovedMSGraphMail($comment['coid']);
         }
         libs\DB::log($comment['coid'], '评论通过异步请求结束', '');
     }
@@ -548,5 +565,270 @@ class Plugin implements PluginInterface
             }
         }
         libs\DB::log($coid, "log", "邮件：评论审核通过：结束");
+    }
+
+    /**
+     * Microsoft Graph API 发送邮件逻辑
+     *
+     * @param string $to 收件人邮箱
+     * @param string $toName 收件人名称
+     * @param string $subject 邮件标题
+     * @param string $body 邮件内容
+     * @param object $config 配置对象
+     * @return string|true 成功返回true，失败返回错误信息
+     */
+    public static function sendViaGraphApi(string $to, string $toName, string $subject, string $body, $config)
+    {
+        try {
+            // Get Access Token
+            $url = "https://login.microsoftonline.com/{$config->tenantId}/oauth2/v2.0/token";
+            $data = [
+                'client_id' => $config->clientId,
+                'scope' => 'https://graph.microsoft.com/.default',
+                'client_secret' => $config->clientSecret,
+                'grant_type' => 'client_credentials',
+            ];
+
+            $options = [
+                'http' => [
+                    'header' => "Content-type: application/x-www-form-urlencoded\r\n",
+                    'method' => 'POST',
+                    'content' => http_build_query($data)
+                ]
+            ];
+
+            $context = stream_context_create($options);
+            $result = @file_get_contents($url, false, $context);
+
+            if ($result === false) {
+                 return "Get Token Error: Request failed. Please check credentials.";
+            }
+
+            $response = json_decode($result, true);
+            if (!isset($response['access_token'])) {
+                return "Get Token Error: No access_token in response.";
+            }
+            $accessToken = $response['access_token'];
+
+            // Send Mail
+            $sendUrl = "https://graph.microsoft.com/v1.0/users/{$config->senderEmail}/sendMail";
+            $emailData = [
+                'message' => [
+                    'subject' => $subject,
+                    'body' => [
+                        'contentType' => 'HTML',
+                        'content' => $body
+                    ],
+                    'toRecipients' => [
+                        [
+                            'emailAddress' => [
+                                'address' => $to,
+                                'name' => $toName
+                            ]
+                        ]
+                    ]
+                ],
+                'saveToSentItems' => 'false'
+            ];
+
+            if (!empty($config->senderName)) {
+                $emailData['message']['from'] = [
+                    'emailAddress' => [
+                        'address' => $config->senderEmail,
+                        'name' => $config->senderName
+                    ]
+                ];
+            }
+
+            $sendOptions = [
+                'http' => [
+                    'header'  => "Authorization: Bearer {$accessToken}\r\n" .
+                                 "Content-Type: application/json\r\n",
+                    'method'  => 'POST',
+                    'content' => json_encode($emailData)
+                ]
+            ];
+
+            $sendContext = stream_context_create($sendOptions);
+            $sendResult = @file_get_contents($sendUrl, false, $sendContext);
+            $headers = $http_response_header;
+
+            // Check for 202 Accepted
+            $status_line = $headers[0];
+            preg_match('/HTTP\/\S+\s(\d{3})/', $status_line, $matches);
+            $status = $matches[1] ?? '0';
+
+            if ($status == '202') {
+                return true;
+            } else {
+                 return "Send Mail Error: API returned status $status. $sendResult";
+            }
+
+        } catch (\Exception $e) {
+            return "Exception: " . $e->getMessage();
+        }
+    }
+
+    /**
+     * 异步发送通知邮件 (Microsoft Graph)
+     *
+     * @access public
+     * @param int $coid 评论id
+     * @return void
+     */
+    public static function sendMSGraphMail(int $coid)
+    {
+        libs\DB::log($coid, 'log', 'MSGraph邮件：发送开始');
+        $pluginOptions = Utils\Helper::options()->plugin('Notice');
+        $comment = Utils\Helper::widgetById('comments', $coid);
+        assert($comment instanceof Widget\Base\Comments);
+
+        if (!in_array('msgraph', $pluginOptions->setting) || empty($pluginOptions->msgraphTenantId)) {
+             libs\DB::log($coid, 'log', 'MSGraph邮件：初始化异常，请检查插件配置');
+             return;
+        }
+
+        $config = (object)[
+            'tenantId' => $pluginOptions->msgraphTenantId,
+            'clientId' => $pluginOptions->msgraphClientId,
+            'clientSecret' => $pluginOptions->msgraphClientSecret,
+            'senderEmail' => $pluginOptions->msgraphSenderEmail,
+            'senderName' => !empty($pluginOptions->msgraphSenderName) ? $pluginOptions->msgraphSenderName : Utils\Helper::options()->title
+        ];
+
+        if (0 == $comment->parent) {
+            // 某文章或页面的新评论，向博主发信
+            libs\DB::log($coid, 'log', 'MSGraph邮件：新评论');
+            if ($comment->ownerId != $comment->authorId) {
+                libs\DB::log($coid, 'log', 'MSGraph邮件：新评论：向博主发信');
+                $post = Utils\Helper::widgetById('contents', $comment->cid);
+                assert($post instanceof Widget\Base\Contents);
+                
+                $subject = libs\ShortCut::replace($pluginOptions->titleForOwner, $coid);
+                $body = libs\ShortCut::replace(libs\ShortCut::getTemplate("owner"), $coid);
+                
+                $res = self::sendViaGraphApi($post->author->mail, $post->author->name, $subject, $body, $config);
+                libs\DB::log($coid, 'mail', $res === true ? "MSGraph发送成功" : "MSGraph发送失败: " . $res . "\nBody: " . $body);
+            } else {
+                libs\DB::log($coid, 'log', 'MSGraph邮件：新评论：文章作者评论，跳过');
+            }
+        } else {
+            libs\DB::log($coid, 'log', 'MSGraph邮件：子评论');
+            if ('approved' == $comment->status) {
+                libs\DB::log($coid, 'log', 'MSGraph邮件：子评论：通过审核');
+                $parent = Utils\Helper::widgetById('comments', $comment->parent);
+                assert($parent instanceof Widget\Base\Comments);
+                
+                if ($comment->authorId != $comment->ownerId) {
+                    libs\DB::log($coid, 'log', 'MSGraph邮件：子评论：通过审核：文章作者评论');
+                    if ($parent->authorId == $parent->ownerId) {
+                        libs\DB::log($coid, 'log', 'MSGraph邮件：子评论：通过审核：文章作者评论：父评论作者为文章作者跳过发信');
+                    } else {
+                        libs\DB::log($coid, 'log', 'MSGraph邮件：子评论：通过审核：文章作者评论：给父评论发信');
+                        $subject = libs\ShortCut::replace($pluginOptions->titleForGuest, $coid);
+                        $body = libs\ShortCut::replace(libs\ShortCut::getTemplate('guest'), $coid);
+                        
+                        $res = self::sendViaGraphApi($parent->mail, $parent->author, $subject, $body, $config);
+                        libs\DB::log($coid, 'mail', $res === true ? "MSGraph发送成功" : "MSGraph发送失败: " . $res);
+                    }
+                } else {
+                    libs\DB::log($coid, 'log', 'MSGraph邮件：子评论：通过审核：游客评论');
+                    // Notify Post Owner (CC) if parent is not owner
+                    if ($parent->authorId != $parent->ownerId) {
+                        libs\DB::log($coid, 'log', 'MSGraph邮件：子评论：通过审核：游客评论：父评论作者非文章作者');
+                        $post = Utils\Helper::widgetById('contents', $comment->cid);
+                        assert($post instanceof Widget\Base\Contents);
+                        
+                        // CC to owner
+                        // Graph API sendMail allows simple to/cc/bcc. My simple wrapper only supports TO for now.
+                        // I will simple send a separate email to owner for now to keep wrapper simple, or update wrapper.
+                        // Sending separate email is safer.
+                        $subject = libs\ShortCut::replace($pluginOptions->titleForOwner, $coid); // Use Owner title? Or Guest title?
+                        // Original code used addCC.
+                        // Let's send to parent first.
+                    } else {
+                         libs\DB::log($coid, 'log', 'MSGraph邮件：子评论：通过审核：游客评论：父评论作者为文章作者');
+                    }
+                    
+                    $subject = libs\ShortCut::replace($pluginOptions->titleForGuest, $coid);
+                    $body = libs\ShortCut::replace(libs\ShortCut::getTemplate('guest'), $coid);
+                    $res = self::sendViaGraphApi($parent->mail, $parent->author, $subject, $body, $config);
+                    libs\DB::log($coid, 'mail', "To Parent: " . ($res === true ? "Success" : $res));
+
+                    if ($parent->authorId != $parent->ownerId) {
+                         // Send to Owner as well since I didn't implement CC in wrapper
+                         $post = Utils\Helper::widgetById('contents', $comment->cid);
+                         $res2 = self::sendViaGraphApi($post->author->mail, $post->author->name, $subject, $body, $config);
+                         libs\DB::log($coid, 'mail', "To Owner (CC): " . ($res2 === true ? "Success" : $res2));
+                    }
+                }
+            } elseif ($comment->status == "waiting") {
+                libs\DB::log($coid, 'log', 'MSGraph邮件：子评论：待审核');
+                $owner = Utils\Helper::widgetById("users", $comment->ownerId);
+                assert($owner instanceof Widget\Base\Users);
+                
+                $subject = libs\ShortCut::replace($pluginOptions->titleForOwner, $coid);
+                $body = libs\ShortCut::replace(libs\ShortCut::getTemplate('owner'), $coid);
+                
+                $res = self::sendViaGraphApi($owner->mail, $owner->name, $subject, $body, $config);
+                libs\DB::log($coid, 'mail', $res === true ? "MSGraph发送成功" : "MSGraph发送失败: " . $res);
+            }
+        }
+        libs\DB::log($coid, 'log', 'MSGraph邮件：发送结束');
+    }
+
+    /**
+     * 异步发送评论通过审核邮件 (Microsoft Graph)
+     *
+     * @access public
+     * @param int $coid 评论id
+     * @return void
+     */
+    public static function sendApprovedMSGraphMail(int $coid)
+    {
+        libs\DB::log($coid, 'log', 'MSGraph邮件：评论审核通过：开始');
+        $pluginOptions = Utils\Helper::options()->plugin('Notice');
+        $comment = Utils\Helper::widgetById('comments', $coid);
+        assert($comment instanceof Widget\Base\Comments);
+
+        if (!in_array('msgraph', $pluginOptions->setting) || empty($pluginOptions->msgraphTenantId)) {
+            libs\DB::log($coid, 'log', 'MSGraph邮件：评论审核通过：缺少关键参数，请检查插件配置');
+            return;
+        }
+
+        $config = (object)[
+            'tenantId' => $pluginOptions->msgraphTenantId,
+            'clientId' => $pluginOptions->msgraphClientId,
+            'clientSecret' => $pluginOptions->msgraphClientSecret,
+            'senderEmail' => $pluginOptions->msgraphSenderEmail,
+            'senderName' => !empty($pluginOptions->msgraphSenderName) ? $pluginOptions->msgraphSenderName : Utils\Helper::options()->title
+        ];
+
+        // 向评论者发送审核通过邮件
+        libs\DB::log($coid, 'log', "MSGraph邮件：评论审核通过：向评论者发信");
+        $subject = libs\ShortCut::replace($pluginOptions->titleForApproved, $coid);
+        $body = libs\ShortCut::replace(libs\ShortCut::getTemplate('approved'), $coid);
+        
+        $res = self::sendViaGraphApi($comment->mail, $comment->author, $subject, $body, $config);
+        libs\DB::log($coid, 'mail', $res === true ? "MSGraph发送成功" : "MSGraph发送失败: " . $res);
+
+        // 向父评论发送通知邮件
+        if ($comment->parent != 0) {
+            libs\DB::log($coid, 'log', "MSGraph邮件：评论审核通过：有父评论");
+            $parent = Utils\Helper::widgetById('comments', $comment->parent);
+            assert($parent instanceof Widget\Base\Comments);
+            
+            if($parent->ownerId != $parent->authorId){
+                libs\DB::log($coid, 'log', "MSGraph邮件：评论审核通过：父评论作者非文章作者向父评论发信");
+                $subject = libs\ShortCut::replace($pluginOptions->titleForGuest, $coid);
+                $body = libs\ShortCut::replace(libs\ShortCut::getTemplate('guest'), $coid);
+                
+                $res = self::sendViaGraphApi($parent->mail, $parent->author, $subject, $body, $config);
+                libs\DB::log($coid, 'mail', $res === true ? "MSGraph发送成功" : "MSGraph发送失败: " . $res);
+            } else {
+                libs\DB::log($coid, 'log', "MSGraph邮件：评论审核通过：父评论作者为文章作者跳过发信");
+            }
+        }
+        libs\DB::log($coid, "log", "MSGraph邮件：评论审核通过：结束");
     }
 }

@@ -15,6 +15,8 @@ use Widget;
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\Exception as PHPMailerException;
 
+
+
 use TypechoPlugin\Notice;
 
 class TestAction extends Typecho\Widget implements Widget\ActionInterface
@@ -115,6 +117,7 @@ class TestAction extends Typecho\Widget implements Widget\ActionInterface
         $options = Typecho\Widget::widget('Widget_Options');
         $action = array(
             'mail' => 'send_test_mail',
+            'msgraph' => 'send_test_msgraph',
             'qmsg' => 'send_test_qmsgchan',
             'serverchan' => 'send_test_serverchan'
         );
@@ -149,7 +152,11 @@ class TestAction extends Typecho\Widget implements Widget\ActionInterface
             "通过"=>"通过", "待审"=>"待审", "垃圾"=>"垃圾"), "待审", 'status', _t('评论状态'));
         $form->addInput($status);
 
-        if ($type == 'mail') {
+        if ($type == 'mail' || $type == 'msgraph') {
+            $senderName = new Typecho\Widget\Helper\Form\Element\Text('senderName', NULL,
+                '', _t('发件人名称'), _t('留空则使用配置默认值'));
+            $form->addInput($senderName);
+
             $toName = new Typecho\Widget\Helper\Form\Element\Text('toName', NULL,
                 '', _t('收件人名称'));
             $form->addInput($toName->addRule('required', '必须填写接收人名称'));
@@ -215,6 +222,7 @@ class TestAction extends Typecho\Widget implements Widget\ActionInterface
                 $msg = $this->_pluginOption->QmsgMsg;
                 break;
             case 'mail':
+            case 'msgraph':
                 switch ($this->request->from('template')['template']) {
                     case 'owner':
                         $msg = Notice\libs\ShortCut::getTemplate('owner');
@@ -337,7 +345,11 @@ class TestAction extends Typecho\Widget implements Widget\ActionInterface
         $mail->getSMTPInstance()->setTimeout(10);
         $mail->isHTML(true);
         $mail->CharSet = 'utf-8';
-        $mail->setFrom($this->_pluginOption->from, $this->_pluginOption->from_name);
+        
+        $senderName = $this->request->get('senderName');
+        $fromName = !empty($senderName) ? $senderName : $this->_pluginOption->from_name;
+        $mail->setFrom($this->_pluginOption->from, $fromName);
+        
         var_dump($this->request->get('to'));
         $mail->addAddress($this->request->get('to'), $this->request->get('toName'));
         $mail->Body = $msg;
@@ -378,6 +390,62 @@ class TestAction extends Typecho\Widget implements Widget\ActionInterface
         $this->response->goBack();
 
 
+    }
+
+    /**
+     * @throws Typecho\Db\Exception
+     * @throws Typecho\Widget\Exception|Typecho\Plugin\Exception
+     */
+    public function sendTestMSGraph()
+    {
+        if (Typecho\Widget::widget('Notice_libs_TestAction')->testForm('msgraph')->validate()) {
+            $this->response->goBack();
+        }
+        $msg = self::replace('msgraph');
+
+
+
+        $senderName = $this->request->get('senderName');
+        if (empty($senderName)) {
+            $senderName = !empty($this->_pluginOption->msgraphSenderName) ? $this->_pluginOption->msgraphSenderName : Utils\Helper::options()->title;
+        }
+
+        $config = (object)[
+            'tenantId' => $this->_pluginOption->msgraphTenantId,
+            'clientId' => $this->_pluginOption->msgraphClientId,
+            'clientSecret' => $this->_pluginOption->msgraphClientSecret,
+            'senderEmail' => $this->_pluginOption->msgraphSenderEmail,
+            'senderName' => $senderName
+        ];
+
+        $to = $this->request->get('to');
+        $toName = $this->request->get('toName');
+        $content = $msg;
+        $subject = ""; // Initialize subject
+
+        switch ($this->request->from('template')['template']) {
+            case 'owner':
+                $subject = Notice\libs\ShortCut::replaceArray($this->_pluginOption->titleForOwner, self::getArray());
+                break;
+            case 'guest':
+                $subject = Notice\libs\ShortCut::replaceArray($this->_pluginOption->titleForGuest, self::getArray());
+                break;
+            case 'approved':
+                $subject = Notice\libs\ShortCut::replaceArray($this->_pluginOption->titleForApproved, self::getArray());
+                break;
+        }
+
+        $result = Notice\Plugin::sendViaGraphApi($to, $toName, $subject, $content, $config);
+        
+        /** 日志 */
+        Notice\libs\DB::log('0', 'mail', "MSGraph测试\n" . ($result === true ? "成功" : $result) . "\n\n" . $msg);
+        
+        /** 提示信息 */
+        $this->widget('Widget_Notice')->set(true === $result ? _t('发送成功') : _t('发送失败：' . $result),
+            true === $result ? 'success' : 'notice');
+
+        /** 转向原页 */
+        $this->response->goBack();
     }
 
     /**
@@ -424,6 +492,7 @@ class TestAction extends Typecho\Widget implements Widget\ActionInterface
         $this->on($this->request->is('do=send_test_serverchan'))->sendTestServerchan();
         $this->on($this->request->is('do=send_test_qmsgchan'))->sendTestQmsgchan();
         $this->on($this->request->is('do=send_test_mail'))->sendTestMail();
+        $this->on($this->request->is('do=send_test_msgraph'))->sendTestMSGraph();
         $this->on($this->request->is('do=edit_theme'))->editTheme($this->request->file);
     }
 
