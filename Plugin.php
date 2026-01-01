@@ -12,7 +12,6 @@ require_once "libs/FormElement/MDFormElements.php";
 require_once "libs/phpmailer/PHPMailer.php";
 require_once "libs/phpmailer/Exception.php";
 require_once "libs/phpmailer/SMTP.php";
-require_once "libs/phpmailer/SMTP.php";
 
 
 
