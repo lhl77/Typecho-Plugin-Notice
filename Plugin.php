@@ -23,14 +23,14 @@ use Widget;
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\Exception as PHPMailerException;
 
-const __TYPECHO_PLUGIN_NOTICE_VERSION__ = '1.0.7';
+const __TYPECHO_PLUGIN_NOTICE_VERSION__ = '1.0.8';
 
 /**
  * <strong style="color:#28B7FF;font-family: 楷体;">评论通知</strong>
  *
  * @package Notice
  * @author <strong style="color:#28B7FF;font-family: 楷体;">MZRME</strong>
- * @version 1.0.7
+ * @version 1.0.8
  * @link https://github.com/imzrme
  * @since 1.2.0
  */
