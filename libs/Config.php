@@ -76,8 +76,8 @@ class Config
   {$backupExist}
   </div>
   <div class="mdui-card-actions">
-    <button class="mdui-btn mdui-ripple" mdui-tooltip="{content: '唯一指定发布源'}"><a href = "https://github.com/RainshawGao/Typecho-Plugin-Notice">Github</a></button>
-    <button class="mdui-btn mdui-ripple" mdui-tooltip="{content: '欢迎来踩博客～'}"><a href = "https://blog.ruixiaolu.com/">作者博客</a></button>
+    <button class="mdui-btn mdui-ripple" mdui-tooltip="{content: '唯一指定发布源'}"><a href = "https://github.com/imzrme/Typecho-Plugin-Notice">Github</a></button>
+    <button class="mdui-btn mdui-ripple" mdui-tooltip="{content: '欢迎来踩博客～'}"><a href = "https://mzrme.com/">作者博客</a></button>
     <button class="mdui-btn mdui-ripple showSettings" mdui-tooltip="{content: '展开所有设置后，使用 ctrl + F 可以快速搜索某一设置项'}">展开所有设置</button>
     <button class="mdui-btn mdui-ripple hideSettings">折叠所有设置</button>
     <br>
