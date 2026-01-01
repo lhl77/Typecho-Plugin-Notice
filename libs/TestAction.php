@@ -270,8 +270,8 @@ class TestAction extends Typecho\Widget implements Widget\ActionInterface
         Notice\libs\DB::log('0', 'wechat', "测试\n" . $result . "\n\n" . $msg);
         $result = json_decode($result, true);
         /** 提示信息 */
-        $this->widget('Widget_Notice')->set(0 === $result['errno'] ? _t('发送成功') : _t('发送失败：' . $result['errmsg']),
-            0 === $result['errno'] ? 'success' : 'notice');
+        $this->widget('Widget_Notice')->set(isset($result['code']) && $result['code'] == 0 ? _t('发送成功') : _t('发送失败：' . ($result['message'] ?? '未知错误')),
+            isset($result['code']) && $result['code'] == 0 ? 'success' : 'notice');
 
         /** 转向原页 */
         $this->response->goBack();
