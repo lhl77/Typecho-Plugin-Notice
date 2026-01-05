@@ -22,14 +22,14 @@ use Widget;
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\Exception as PHPMailerException;
 
-const __TYPECHO_PLUGIN_NOTICE_VERSION__ = '1.0.8';
+const __TYPECHO_PLUGIN_NOTICE_VERSION__ = '1.0.9';
 
 /**
  * <strong style="color:#28B7FF;font-family: 楷体;">评论通知</strong>
  *
  * @package Notice
  * @author <strong style="color:#28B7FF;font-family: 楷体;">MZRME</strong>
- * @version 1.0.8
+ * @version 1.0.9
  * @link https://github.com/imzrme
  * @since 1.2.0
  */
@@ -473,16 +473,46 @@ class Plugin implements PluginInterface
                 } else {
                     libs\DB::log($coid, 'log', '邮件：子评论：通过审核：游客评论');
                     if ($parent->authorId != $parent->ownerId) {
+                        // 父评论者不是文章作者：分别发送两封邮件
                         libs\DB::log($coid, 'log', '邮件：子评论：通过审核：游客评论：父评论作者非文章作者');
+                        
+                        // 给父评论者发送guest模板
+                        $mail->addAddress($parent->mail, $parent->author);
+                        $mail->Subject = libs\ShortCut::replace($pluginOptions->titleForGuest, $coid);
+                        $mail->Body = libs\ShortCut::replace(libs\ShortCut::getTemplate('guest'), $coid);
+                        $mail->AltBody = "作者：" .
+                            $comment->author .
+                            "\r\n链接：" .
+                            $comment->permalink .
+                            "\r\n评论：\r\n" .
+                            $comment->text;
+                        $mail->send();
+                        libs\DB::log($coid, 'mail', 'To Parent: ' . $mail->Body);
+                        
+                        // 给文章作者发送owner模板
+                        $mail->clearAllRecipients();
                         $post = Utils\Helper::widgetById('contents', $comment->cid);
                         assert($post instanceof Widget\Base\Contents);
-                        $mail->addCC($post->author->mail, $post->author->name);
+                        $mail->addAddress($post->author->mail, $post->author->name);
+                        $mail->Subject = libs\ShortCut::replace($pluginOptions->titleForOwner, $coid);
+                        $mail->Body = libs\ShortCut::replace(libs\ShortCut::getTemplate('owner'), $coid);
+                        $mail->AltBody = "作者：" .
+                            $comment->author .
+                            "\r\n链接：" .
+                            $comment->permalink .
+                            "\r\n评论：\r\n" .
+                            $comment->text;
+                        $mail->send();
+                        libs\DB::log($coid, 'mail', 'To Owner: ' . $mail->Body);
                     } else {
+                        // 父评论者就是文章作者：只发owner模板
                         libs\DB::log($coid, 'log', '邮件：子评论：通过审核：游客评论：父评论作者为文章作者');
+                        $post = Utils\Helper::widgetById('contents', $comment->cid);
+                        assert($post instanceof Widget\Base\Contents);
+                        $mail->addAddress($post->author->mail, $post->author->name);
+                        $mail->Subject = libs\ShortCut::replace($pluginOptions->titleForOwner, $coid);
+                        $mail->Body = libs\ShortCut::replace(libs\ShortCut::getTemplate('owner'), $coid);
                     }
-                    $mail->addAddress($parent->mail, $parent->author);
-                    $mail->Subject = libs\ShortCut::replace($pluginOptions->titleForGuest, $coid);
-                    $mail->Body = libs\ShortCut::replace(libs\ShortCut::getTemplate('guest'), $coid);
                 }
             } elseif ($comment->status == "waiting") {
                 // 评论标记为待审核，向博主发送评论通知
@@ -732,33 +762,33 @@ class Plugin implements PluginInterface
                     }
                 } else {
                     libs\DB::log($coid, 'log', 'MSGraph邮件：子评论：通过审核：游客评论');
-                    // Notify Post Owner (CC) if parent is not owner
+                    
                     if ($parent->authorId != $parent->ownerId) {
+                        // 父评论者不是文章作者：给父评论者发guest模板，给文章作者发owner模板
                         libs\DB::log($coid, 'log', 'MSGraph邮件：子评论：通过审核：游客评论：父评论作者非文章作者');
+                        
+                        // 给父评论者发送guest模板邮件
+                        $subject = libs\ShortCut::replace($pluginOptions->titleForGuest, $coid);
+                        $body = libs\ShortCut::replace(libs\ShortCut::getTemplate('guest'), $coid);
+                        $res = self::sendViaGraphApi($parent->mail, $parent->author, $subject, $body, $config);
+                        libs\DB::log($coid, 'mail', "To Parent: " . ($res === true ? "Success" : $res));
+                        
+                        // 给文章作者发送owner模板邮件
                         $post = Utils\Helper::widgetById('contents', $comment->cid);
                         assert($post instanceof Widget\Base\Contents);
-                        
-                        // CC to owner
-                        // Graph API sendMail allows simple to/cc/bcc. My simple wrapper only supports TO for now.
-                        // I will simple send a separate email to owner for now to keep wrapper simple, or update wrapper.
-                        // Sending separate email is safer.
-                        $subject = libs\ShortCut::replace($pluginOptions->titleForOwner, $coid); // Use Owner title? Or Guest title?
-                        // Original code used addCC.
-                        // Let's send to parent first.
+                        $subjectOwner = libs\ShortCut::replace($pluginOptions->titleForOwner, $coid);
+                        $bodyOwner = libs\ShortCut::replace(libs\ShortCut::getTemplate('owner'), $coid);
+                        $res2 = self::sendViaGraphApi($post->author->mail, $post->author->name, $subjectOwner, $bodyOwner, $config);
+                        libs\DB::log($coid, 'mail', "To Owner: " . ($res2 === true ? "Success" : $res2));
                     } else {
-                         libs\DB::log($coid, 'log', 'MSGraph邮件：子评论：通过审核：游客评论：父评论作者为文章作者');
-                    }
-                    
-                    $subject = libs\ShortCut::replace($pluginOptions->titleForGuest, $coid);
-                    $body = libs\ShortCut::replace(libs\ShortCut::getTemplate('guest'), $coid);
-                    $res = self::sendViaGraphApi($parent->mail, $parent->author, $subject, $body, $config);
-                    libs\DB::log($coid, 'mail', "To Parent: " . ($res === true ? "Success" : $res));
-
-                    if ($parent->authorId != $parent->ownerId) {
-                         // Send to Owner as well since I didn't implement CC in wrapper
-                         $post = Utils\Helper::widgetById('contents', $comment->cid);
-                         $res2 = self::sendViaGraphApi($post->author->mail, $post->author->name, $subject, $body, $config);
-                         libs\DB::log($coid, 'mail', "To Owner (CC): " . ($res2 === true ? "Success" : $res2));
+                        // 父评论者就是文章作者：只给他发送owner模板
+                        libs\DB::log($coid, 'log', 'MSGraph邮件：子评论：通过审核：游客评论：父评论作者为文章作者');
+                        $post = Utils\Helper::widgetById('contents', $comment->cid);
+                        assert($post instanceof Widget\Base\Contents);
+                        $subject = libs\ShortCut::replace($pluginOptions->titleForOwner, $coid);
+                        $body = libs\ShortCut::replace(libs\ShortCut::getTemplate('owner'), $coid);
+                        $res = self::sendViaGraphApi($post->author->mail, $post->author->name, $subject, $body, $config);
+                        libs\DB::log($coid, 'mail', "To Owner: " . ($res === true ? "Success" : $res));
                     }
                 }
             } elseif ($comment->status == "waiting") {
