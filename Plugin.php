@@ -36,13 +36,13 @@ const __TYPECHO_PLUGIN_NOTICE_VERSION__ = '1.0.9';
 class Plugin implements PluginInterface
 {
     /** @var string 插件配置action前缀 */
-    public static string $action_setting = 'Plugin-Notice-Setting';
+    public static string $action_setting = 'Plugin_Notice_Setting';
 
     /** @var string 插件测试action前缀 */
-    public static string $action_test = 'Plugin-Notice-Test';
+    public static string $action_test = 'Plugin_Notice_Test';
 
     /** @var string 编辑插件模版action前缀 */
-    public static string $action_edit_template = 'Plugin-Notice-Edit-Template';
+    public static string $action_edit_template = 'Plugin_Notice_Edit_Template';
 
     /** @var string 插件编辑模板面板 */
     public static string $panel_edit_template = 'Notice/page/edit-template.php';
