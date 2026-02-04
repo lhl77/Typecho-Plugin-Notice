@@ -3,7 +3,9 @@ include "header.php";
 include "menu.php";
 $current = $request->get('type', 'mail');
 $title = $current == 'mail' ? 'Notice 插件邮件配置测试' :
-    ($current == 'qmsg'? 'Notice 插件Qmsg酱配置测试': ($current == 'msgraph' ? 'Notice 插件Microsoft Graph配置测试' : 'Notice 插件Server酱配置测试'))
+    ($current == 'qmsg'? 'Notice 插件Qmsg酱配置测试': 
+    ($current == 'msgraph' ? 'Notice 插件Microsoft Graph配置测试' : 
+    ($current == 'telegram' ? 'Notice 插件Telegram Bot配置测试' : 'Notice 插件Server酱配置测试')))
 ?>
 
     <div class="main">
@@ -22,6 +24,8 @@ $title = $current == 'mail' ? 'Notice 插件邮件配置测试' :
                                 <?php _e('Qmsg酱发送测试'); ?></a></li>
                         <li<?=($current == 'theme' ? ' class="current"' : '')?>><a href="<?php $options->adminUrl('extending.php?panel=' . TypechoPlugin\Notice\Plugin::$panel_test . '&type=serverchan'); ?>">
                                 <?php _e('Server酱发送测试'); ?></a></li>
+                        <li<?=($current == 'telegram' ? ' class="current"' : '')?>><a href="<?php $options->adminUrl('extending.php?panel=' . TypechoPlugin\Notice\Plugin::$panel_test . '&type=telegram'); ?>">
+                                <?php _e('Telegram Bot发送测试'); ?></a></li>
                     </ul>
                 </div>
                 <div class="typecho-edit-theme">

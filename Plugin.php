@@ -22,14 +22,14 @@ use Widget;
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\Exception as PHPMailerException;
 
-const __TYPECHO_PLUGIN_NOTICE_VERSION__ = '1.0.9';
+const __TYPECHO_PLUGIN_NOTICE_VERSION__ = '1.1.0';
 
 /**
  * <strong style="color:#28B7FF;font-family: 楷体;">评论通知</strong>
  *
  * @package Notice
  * @author <strong style="color:#28B7FF;font-family: 楷体;">MZRME</strong>
- * @version 1.0.9
+ * @version 1.1.0
  * @link https://github.com/imzrme
  * @since 1.2.0
  */
@@ -87,6 +87,7 @@ class Plugin implements PluginInterface
         Typecho\Plugin::factory('Widget_Service')->sendMSGraphMail = __CLASS__ . '::sendMSGraphMail';
         Typecho\Plugin::factory('Widget_Service')->sendApprovedMail = __CLASS__ . '::sendApprovedMail';
         Typecho\Plugin::factory('Widget_Service')->sendApprovedMSGraphMail = __CLASS__ . '::sendApprovedMSGraphMail';
+        Typecho\Plugin::factory('Widget_Service')->sendTelegram = __CLASS__ . '::sendTelegram';
 
 
         Utils\Helper::addAction(self::$action_setting, 'TypechoPlugin\Notice\libs\SettingAction');
@@ -172,6 +173,9 @@ class Plugin implements PluginInterface
             // Microsoft Graph
             libs\Config::MicrosoftGraph($form);
 
+            // Telegram Bot
+            libs\Config::Telegram($form);
+
             // Email Settings (Shared)
             libs\Config::EmailSettings($form);
         }
@@ -235,6 +239,10 @@ class Plugin implements PluginInterface
         if (in_array('qmsg', $options->setting) && !empty($options->QmsgKey)) {
             libs\DB::log($comment->coid, "log", "调用Qmsg酱异步");
             self::sendQmsg($comment->coid);
+        }
+        if (in_array('telegram', $options->setting) && !empty($options->tgBotToken)) {
+            libs\DB::log($comment->coid, "log", "调用Telegram Bot异步");
+            self::sendTelegram($comment->coid);
         }
         libs\DB::log($comment->coid, 'log', '评论异步请求结束');
     }
@@ -371,6 +379,81 @@ class Plugin implements PluginInterface
 
         libs\DB::log($coid, 'qq', $result . "\n\n" . $msg);
         libs\DB::log($coid, 'log', 'Qmsg酱：通知结束');
+    }
+
+    /**
+     * 异步发送 Telegram Bot 通知
+     *
+     * @param integer $coid 评论ID
+     * @return void
+     * @throws Typecho\Db\Exception
+     * @throws Typecho\Plugin\Exception
+     * @access public
+     */
+    public static function sendTelegram(int $coid)
+    {
+        libs\DB::log($coid, 'log', 'Telegram：通知开始');
+        $options = Utils\Helper::options();
+        $pluginOptions = $options->plugin('Notice');
+        $comment = Utils\Helper::widgetById('comments', $coid);
+        
+        // 验证配置
+        if (empty($pluginOptions->tgBotToken)) {
+            libs\DB::log($coid, 'log', 'Telegram：缺少Bot Token');
+            return;
+        }
+        if (empty($pluginOptions->tgChatId)) {
+            libs\DB::log($coid, 'log', 'Telegram：缺少Chat ID');
+            return;
+        }
+        if (!$comment->have() || empty($comment->mail)) {
+            libs\DB::log($coid, 'log', 'Telegram：评论缺少关键信息');
+            return;
+        }
+        if ($comment->authorId == 1) {
+            libs\DB::log($coid, 'log', 'Telegram：博主评论，跳过');
+            return;
+        }
+        
+        // 构造消息内容
+        $title = libs\ShortCut::replace($pluginOptions->titleForOwner, $coid);
+        $authorName = $comment->author;
+        $authorMail = $comment->mail;
+        $authorUrl = $comment->url;
+        $text = $comment->text;
+        
+        // 构造 Telegram 消息 (Markdown 格式)
+        $msg = "🎉 " . $title . "\n";
+        $msg .= "评论者: `" . $authorName . "`\n";
+        $msg .= "邮箱: `" . $authorMail . "`\n";
+        if (!empty($authorUrl)) {
+            $msg .= "网站: `" . $authorUrl . "`\n";
+        }
+        $msg .= "评论内容:" . $text;
+        
+        // 发送请求
+        $botToken = $pluginOptions->tgBotToken;
+        $chatId = $pluginOptions->tgChatId;
+        $apiUrl = "https://api.telegram.org/bot" . $botToken . "/sendMessage";
+        
+        $postdata = http_build_query([
+            'chat_id' => $chatId,
+            'text' => $msg,
+            'parse_mode' => 'Markdown'
+        ]);
+        
+        $opts = [
+            'http' => [
+                'method' => 'POST',
+                'header' => 'Content-type: application/x-www-form-urlencoded',
+                'content' => $postdata
+            ]
+        ];
+        $context = stream_context_create($opts);
+        $result = file_get_contents($apiUrl, false, $context);
+        
+        libs\DB::log($coid, 'telegram', $result . "\n\n" . $msg);
+        libs\DB::log($coid, 'log', 'Telegram：通知结束');
     }
 
     /**

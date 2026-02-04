@@ -203,6 +203,7 @@ EOF;
                 'qmsg' => '启用Qmsg酱',
                 'mail' => '启用邮件',
                 'msgraph' => '启用Microsoft Graph邮件',
+                'telegram' => '启用Telegram Bot',
                 'updatetip' => '启用更新提示',
             ),
             array('updatetip'), '插件设置', _t('请选择您要启用的通知方式。<br/>' .
@@ -395,6 +396,34 @@ EOF;
         $form->addItem(new Typecho\Widget\Helper\Layout('/div'));
     }
 
+    public static function Telegram(Typecho\Widget\Helper\Form $form)
+    {
+        $form->addItem(new MDTitle('Telegram Bot 配置', 'Telegram Bot Token、Chat ID', false));
+        $tgBotToken = new MDText('tgBotToken', NULL, NULL, _t('Telegram Bot Token'),
+            _t('请填写 Telegram Bot Token (通过 @BotFather 获取)'));
+        $form->addInput($tgBotToken);
+
+        $tgChatId = new MDText('tgChatId', NULL, NULL, _t('Telegram Chat ID'),
+            _t('请填写接收通知的 User ID 或 Channel ID'));
+        $form->addInput($tgChatId);
+
+        $form->addItem(new Typecho\Widget\Helper\Layout('/div'));
+        $form->addItem(new Typecho\Widget\Helper\Layout('/div'));
+    }
+
+    public static function checkTelegram(array $settings)
+    {
+        if (in_array('telegram', $settings['setting'])) {
+            if (empty($settings['tgBotToken'])) {
+                return _t('请填写 Telegram Bot Token');
+            }
+            if (empty($settings['tgChatId'])) {
+                return _t('请填写 Telegram Chat ID');
+            }
+        }
+        return '';
+    }
+
     public static function checkMicrosoftGraph(array $settings)
     {
         if (in_array('msgraph', $settings['setting'])) {
@@ -452,6 +481,10 @@ EOF;
             return $s;
 
         $s = self::checkMicrosoftGraph($settings);
+        if ($s != '')
+            return $s;
+        
+        $s = self::checkTelegram($settings);
         if ($s != '')
             return $s;
         

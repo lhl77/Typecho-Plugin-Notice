@@ -119,7 +119,8 @@ class TestAction extends Typecho\Widget implements Widget\ActionInterface
             'mail' => 'send_test_mail',
             'msgraph' => 'send_test_msgraph',
             'qmsg' => 'send_test_qmsgchan',
-            'serverchan' => 'send_test_serverchan'
+            'serverchan' => 'send_test_serverchan',
+            'telegram' => 'send_test_telegram'
         );
         $form = new Typecho\Widget\Helper\Form(Typecho\Common::url('/action/' . Notice\Plugin::$action_test . '?do=' . $action[$type], $options->index),
             Typecho\Widget\Helper\Form::POST_METHOD);
@@ -139,11 +140,13 @@ class TestAction extends Typecho\Widget implements Widget\ActionInterface
         $text = new Typecho\Widget\Helper\Form\Element\Textarea('text', NULL, '测试评论内容_(:з」∠)_', _t('text'), _t('评论内容'));
         $form->addInput($text->addRule('required', '必须填写评论内容'));
 
-        $author_p = new Typecho\Widget\Helper\Form\Element\Text('author_p', NULL, NULL, _t('author_p'), _t('被评论者名字'));
-        $form->addInput($author_p);
+        if ($type != 'telegram') {
+            $author_p = new Typecho\Widget\Helper\Form\Element\Text('author_p', NULL, NULL, _t('author_p'), _t('被评论者名字'));
+            $form->addInput($author_p);
 
-        $text_p = new Typecho\Widget\Helper\Form\Element\Textarea('text_p', NULL, NULL, _t('被评论内容'));
-        $form->addInput($text_p);
+            $text_p = new Typecho\Widget\Helper\Form\Element\Textarea('text_p', NULL, NULL, _t('被评论内容'));
+            $form->addInput($text_p);
+        }
 
         $permalink = new Typecho\Widget\Helper\Form\Element\Text('permalink', NULL, Utils\Helper::options()->index, _t('permalink'), _t('评论链接'));
         $form->addInput($permalink);
@@ -449,6 +452,56 @@ class TestAction extends Typecho\Widget implements Widget\ActionInterface
     }
 
     /**
+     * @throws Typecho\Db\Exception
+     * @throws Typecho\Widget\Exception|Typecho\Plugin\Exception
+     */
+    public function sendTestTelegram()
+    {
+        if (Typecho\Widget::widget('Notice_libs_TestAction')->testForm('telegram')->validate()) {
+            $this->response->goBack();
+        }
+        
+        $form = $this->request->from('title', 'author', 'mail', 'text', 'permalink');
+        $title = Notice\libs\ShortCut::replaceArray($this->_pluginOption->titleForOwner, self::getArray());
+        
+        // 构造消息
+        $msg = "🎉 " . $title . "\n";
+        $msg .= "评论者: `" . $form['author'] . "`\n";
+        $msg .= "邮箱: `" . $form['mail'] . "`\n";
+        $msg .= "评论内容:" . $form['text'];
+        
+        $botToken = $this->_pluginOption->tgBotToken;
+        $chatId = $this->_pluginOption->tgChatId;
+        $apiUrl = "https://api.telegram.org/bot" . $botToken . "/sendMessage";
+        
+        $postdata = http_build_query([
+            'chat_id' => $chatId,
+            'text' => $msg,
+            'parse_mode' => 'Markdown'
+        ]);
+        
+        $opts = [
+            'http' => [
+                'method' => 'POST',
+                'header' => 'Content-type: application/x-www-form-urlencoded',
+                'content' => $postdata
+            ]
+        ];
+        $context = stream_context_create($opts);
+        $result = file_get_contents($apiUrl, false, $context);
+        
+        Notice\libs\DB::log('0', 'telegram', "测试\n" . $result . "\n\n" . $msg);
+        $resultArr = json_decode($result, true);
+        
+        $this->widget('Widget_Notice')->set(
+            isset($resultArr['ok']) && $resultArr['ok'] === true ? _t('发送成功') : _t('发送失败：' . ($resultArr['description'] ?? '未知错误')),
+            isset($resultArr['ok']) && $resultArr['ok'] === true ? 'success' : 'notice'
+        );
+        
+        $this->response->goBack();
+    }
+
+    /**
      * 编辑模板文件
      * @param $file
      * @throws Typecho\Widget\Exception
@@ -493,6 +546,7 @@ class TestAction extends Typecho\Widget implements Widget\ActionInterface
         $this->on($this->request->is('do=send_test_qmsgchan'))->sendTestQmsgchan();
         $this->on($this->request->is('do=send_test_mail'))->sendTestMail();
         $this->on($this->request->is('do=send_test_msgraph'))->sendTestMSGraph();
+        $this->on($this->request->is('do=send_test_telegram'))->sendTestTelegram();
         $this->on($this->request->is('do=edit_theme'))->editTheme($this->request->file);
     }
 

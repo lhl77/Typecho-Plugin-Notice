@@ -25,6 +25,7 @@ Notice 是 Typecho 评论通知插件，支持 SMTP、Server酱、Qmsg酱 两种
 - [x] Qmsg 酱推送测试
 - [x] 在线编辑模版文件
 - [x] Microsft Graph Api 邮件推送测试
+- [x] Telegram Bot 推送测试
 - [ ] 企业微信推送
 - [ ] 钉钉推送
 - [ ] 自定义推送
