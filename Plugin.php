@@ -422,8 +422,21 @@ class Plugin implements PluginInterface
         $authorUrl = $comment->url;
         $text = $comment->text;
         
+        // 判断评论状态
+        $isPending = $comment->status == 'waiting';
+        $buttonUrl = $comment->permalink;
+        $buttonText = _t('👀 查看评论');
+
+        if ($isPending) {
+            $title = "🎉 [" . $comment->title . "]一文有待审核的评论";
+            // 构造管理页面链接
+            $adminUrl = rtrim(Utils\Helper::options()->siteUrl, '/') . '/' . ltrim(__TYPECHO_ADMIN_DIR__, '/') . 'manage-comments.php?status=waiting';
+            $buttonUrl = $adminUrl;
+            $buttonText = _t('🔕 管理评论');
+        }
+
         // 构造 Telegram 消息 (Markdown 格式)
-        $msg = "🎉 " . $title . "\n";
+        $msg = $isPending ? ($title . "\n") : ("🎉 " . $title . "\n");
         $msg .= "评论者: `" . $authorName . "`\n";
         $msg .= "邮箱: `" . $authorMail . "`\n";
         if (!empty($authorUrl)) {
@@ -431,6 +444,15 @@ class Plugin implements PluginInterface
         }
         $msg .= "评论内容:" . $text;
         
+        // 构造按钮
+        $keyboard = [
+            'inline_keyboard' => [
+                [
+                    ['text' => $buttonText, 'url' => $buttonUrl]
+                ]
+            ]
+        ];
+
         // 发送请求
         $botToken = $pluginOptions->tgBotToken;
         $chatId = $pluginOptions->tgChatId;
@@ -439,7 +461,8 @@ class Plugin implements PluginInterface
         $postdata = http_build_query([
             'chat_id' => $chatId,
             'text' => $msg,
-            'parse_mode' => 'Markdown'
+            'parse_mode' => 'Markdown',
+            'reply_markup' => json_encode($keyboard)
         ]);
         
         $opts = [
