@@ -7,6 +7,10 @@ if (!defined('__TYPECHO_ROOT_DIR__')) {
 
 use Typecho;
 use Widget;
+use Utils;
+
+// 导入 Telegram 相关类
+require_once __DIR__ . '/Telegram.php';
 
 class SettingAction extends Typecho\Widget implements Widget\ActionInterface
 {
@@ -63,19 +67,45 @@ class SettingAction extends Typecho\Widget implements Widget\ActionInterface
     }
 
     /**
-     * @throws Typecho\Db\Exception
+     * 设置 Telegram Webhook
      */
-    protected function init(){
+    private function setup_webhook()
+    {
+        // 清空输出缓冲
+        while (ob_get_level() > 0) {
+            ob_end_clean();
+        }
+        
+        header('Content-Type: application/json; charset=utf-8');
+        
+        try {
+            $result = TelegramWebhook::setupWebhook();
+            echo json_encode($result, JSON_UNESCAPED_UNICODE);
+        } catch (\Exception $e) {
+            echo json_encode([
+                'success' => false,
+                'message' => '异常：' . $e->getMessage()
+            ], JSON_UNESCAPED_UNICODE);
+        }
+        exit;
+    }
+
+    protected function init()
+    {
         $this->_db = Typecho\Db::get();
     }
 
-    /**
-     * @throws Typecho\Db\Exception
-     */
     public function action()
     {
         Typecho\Widget::widget('Widget_User')->pass('administrator');
+        
+        if ($this->request->is('do=setup_webhook')) {
+            $this->setup_webhook();
+            return;
+        }
+        
         $this->init();
+        
         $this->on($this->request->is('do=backup'))->backup();
         $this->on($this->request->is('do=del_backup'))->del_backup();
         $this->on($this->request->is('do=recover_backup'))->recover_backup();
