@@ -8,6 +8,8 @@ if (!defined('__TYPECHO_ROOT_DIR__')) {
 require_once "libs/Config.php";
 require_once "libs/db.php";
 require_once "libs/Utils.php";
+require_once "libs/Telegram.php";
+require_once "libs/TelegramWebhookAction.php";
 require_once "libs/FormElement/MDFormElements.php";
 require_once "libs/phpmailer/PHPMailer.php";
 require_once "libs/phpmailer/Exception.php";
@@ -22,27 +24,26 @@ use Widget;
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\Exception as PHPMailerException;
 
-const __TYPECHO_PLUGIN_NOTICE_VERSION__ = '1.1.0';
+const __TYPECHO_PLUGIN_NOTICE_VERSION__ = '1.1.1';
 
 /**
  * <strong style="color:#28B7FF;font-family: 楷体;">评论通知</strong>
  *
  * @package Notice
- * @author <strong style="color:#28B7FF;font-family: 楷体;">MZRME</strong>
- * @version 1.1.0
- * @link https://github.com/imzrme
+ * @author <strong><a href="https://github.com/imzrme"  style="color:#28B7FF;font-family: 楷体;">MZRME</a></strong>，<a href="https://github.com/lhl77">LHL</a>
+ * @version 1.1.1
  * @since 1.2.0
  */
 class Plugin implements PluginInterface
 {
     /** @var string 插件配置action前缀 */
-    public static string $action_setting = 'Plugin-Notice-Setting';
+    public static string $action_setting = 'Plugin_Notice_Setting';
 
     /** @var string 插件测试action前缀 */
-    public static string $action_test = 'Plugin-Notice-Test';
+    public static string $action_test = 'Plugin_Notice_Test';
 
     /** @var string 编辑插件模版action前缀 */
-    public static string $action_edit_template = 'Plugin-Notice-Edit-Template';
+    public static string $action_edit_template = 'Plugin_Notice_Edit_Template';
 
     /** @var string 插件编辑模板面板 */
     public static string $panel_edit_template = 'Notice/page/edit-template.php';
@@ -87,12 +88,17 @@ class Plugin implements PluginInterface
         Typecho\Plugin::factory('Widget_Service')->sendMSGraphMail = __CLASS__ . '::sendMSGraphMail';
         Typecho\Plugin::factory('Widget_Service')->sendApprovedMail = __CLASS__ . '::sendApprovedMail';
         Typecho\Plugin::factory('Widget_Service')->sendApprovedMSGraphMail = __CLASS__ . '::sendApprovedMSGraphMail';
+        // Telegram
         Typecho\Plugin::factory('Widget_Service')->sendTelegram = __CLASS__ . '::sendTelegram';
+
+        Utils\Helper::addAction('telegram_webhook', 'TypechoPlugin\\Notice\\libs\\TelegramWebhookAction');
 
 
         Utils\Helper::addAction(self::$action_setting, 'TypechoPlugin\Notice\libs\SettingAction');
         Utils\Helper::addAction(self::$action_test, 'TypechoPlugin\Notice\libs\TestAction');
         Utils\Helper::addAction(self::$action_edit_template, 'TypechoPlugin\Notice\libs\TestAction');
+        
+        
         $index = Utils\Helper::addMenu("Notice");
         Utils\Helper::addPanel($index, self::$panel_edit_template, '编辑邮件模版', '', 'administrator');
         Utils\Helper::addPanel($index, self::$panel_test, '配置测试', '', 'administrator');
@@ -116,6 +122,9 @@ class Plugin implements PluginInterface
         Utils\Helper::removeAction(self::$action_setting);
         Utils\Helper::removeAction(self::$action_test);
         Utils\Helper::removeAction(self::$action_edit_template);
+        
+        Utils\Helper::removeAction('telegram_webhook');
+
         $index = Utils\Helper::removeMenu("Notice");
         Utils\Helper::removePanel($index, self::$panel_edit_template);
         Utils\Helper::removePanel($index, self::$panel_test);
@@ -173,7 +182,7 @@ class Plugin implements PluginInterface
             // Microsoft Graph
             libs\Config::MicrosoftGraph($form);
 
-            // Telegram Bot
+            // Telegram
             libs\Config::Telegram($form);
 
             // Email Settings (Shared)
@@ -208,7 +217,7 @@ class Plugin implements PluginInterface
      */
     public static function configCheck(array $settings): string
     {
-        return libs\Config::check($settings);
+        return \TypechoPlugin\Notice\libs\Config::check($settings);
     }
 
     /**
@@ -240,9 +249,9 @@ class Plugin implements PluginInterface
             libs\DB::log($comment->coid, "log", "调用Qmsg酱异步");
             self::sendQmsg($comment->coid);
         }
-        if (in_array('telegram', $options->setting) && !empty($options->tgBotToken)) {
-            libs\DB::log($comment->coid, "log", "调用Telegram Bot异步");
-            self::sendTelegram($comment->coid);
+        if (in_array('telegram', $options->setting) && !empty($options->tgToken)) {
+            libs\DB::log($comment->coid, "log", "调用 Telegram 发送异步");
+            self::sendTelegram($comment->coid,$comment->permalink);
         }
         libs\DB::log($comment->coid, 'log', '评论异步请求结束');
     }
@@ -382,101 +391,155 @@ class Plugin implements PluginInterface
     }
 
     /**
-     * 异步发送 Telegram Bot 通知
+     * 检查 Telegram 配置
      *
-     * @param integer $coid 评论ID
-     * @return void
-     * @throws Typecho\Db\Exception
-     * @throws Typecho\Plugin\Exception
-     * @access public
+     * @param object $pluginOptions
+     * @param Widget\Base\Comments $comment
+     * @return array|null [token, chatId, msgTemplate]
      */
-    public static function sendTelegram(int $coid)
+    public static function checkTelegramConfig($pluginOptions, $comment): ?array
     {
-        libs\DB::log($coid, 'log', 'Telegram：通知开始');
-        $options = Utils\Helper::options();
-        $pluginOptions = $options->plugin('Notice');
-        $comment = Utils\Helper::widgetById('comments', $coid);
-        
-        // 验证配置
-        if (empty($pluginOptions->tgBotToken)) {
-            libs\DB::log($coid, 'log', 'Telegram：缺少Bot Token');
-            return;
+        if (!in_array('telegram', $pluginOptions->setting)) {
+            return null;
         }
-        if (empty($pluginOptions->tgChatId)) {
-            libs\DB::log($coid, 'log', 'Telegram：缺少Chat ID');
-            return;
+        if (empty($pluginOptions->tgToken)) {
+            return null;
         }
         if (!$comment->have() || empty($comment->mail)) {
-            libs\DB::log($coid, 'log', 'Telegram：评论缺少关键信息');
+            return null;
+        }
+
+        $token = $pluginOptions->tgToken;
+        $tpl = !empty($pluginOptions->tgMsg) ? $pluginOptions->tgMsg : null;
+
+        // 优先使用绑定的 chat_id，其次使用默认 chat_id
+        $boundChatId = self::getBoundChatId($comment->mail, $pluginOptions);
+        $defaultChatId = !empty($pluginOptions->tgChatId) ? (string)$pluginOptions->tgChatId : null;
+
+        $chatId = $boundChatId ?? $defaultChatId;
+        if (empty($chatId)) {
+            // 既没有绑定也没有默认 chat_id，则认为配置不完整
+            return null;
+        }
+
+        return [$token, $chatId, $tpl];
+    }
+
+    /**
+     * 根据邮箱查找绑定的 TG Chat ID（插件配置 tgBindings，JSON 格式 {"email":"chat_id",...}）
+     *
+     * @param string $email
+     * @param object $pluginOptions
+     * @return string|null
+     */
+    public static function getBoundChatId(string $email, $pluginOptions): ?string
+    {
+        if (empty($pluginOptions->tgBindings)) {
+            return null;
+        }
+        $map = json_decode($pluginOptions->tgBindings, true);
+        if (!is_array($map)) {
+            return null;
+        }
+        return $map[strtolower($email)] ?? null;
+    }
+
+    /**
+     * 异步发送 Telegram Bot 推送
+     *
+     * @param int $coid 评论id
+     * @return void
+     * @throws Typecho\Db\Exception
+     */
+    public static function sendTelegram(int $coid, string $permalink)
+    {
+        libs\DB::log($coid, 'log', 'Telegram：发送开始');
+        $pluginOptions = Utils\Helper::options()->plugin('Notice');
+        $comment = Utils\Helper::widgetById('comments', $coid);
+        assert($comment instanceof Widget\Base\Comments);
+
+        $cfg = self::checkTelegramConfig($pluginOptions, $comment);
+        if ($cfg === null) {
+            libs\DB::log($coid, 'log', 'Telegram：初始化异常，请检查插件配置（token/chat_id/绑定）');
             return;
         }
+        [$token, $chatId, $tpl] = $cfg;
+
+        // 检查是否为博主自评论（authorId == 1 表示博主）
         if ($comment->authorId == 1) {
-            libs\DB::log($coid, 'log', 'Telegram：博主评论，跳过');
+            libs\DB::log($coid, 'log', 'Telegram：博主自评论，跳过发送');
             return;
         }
-        
-        // 构造消息内容
-        $title = libs\ShortCut::replace($pluginOptions->titleForOwner, $coid);
-        $authorName = $comment->author;
-        $authorMail = $comment->mail;
-        $authorUrl = $comment->url;
-        $text = $comment->text;
-        
-        // 判断评论状态
-        $isPending = $comment->status == 'waiting';
-        $buttonUrl = $comment->permalink;
-        $buttonText = _t('👀 查看评论');
 
-        if ($isPending) {
-            $title = "🎉 [" . $comment->title . "]一文有待审核的评论";
-            // 构造管理页面链接
-            $adminUrl = rtrim(Utils\Helper::options()->siteUrl, '/') . '/' . ltrim(__TYPECHO_ADMIN_DIR__, '/') . 'manage-comments.php?status=waiting';
-            $buttonUrl = $adminUrl;
-            $buttonText = _t('🔕 管理评论');
+        // 构建消息
+        if (!empty($tpl)) {
+            $msg = $tpl;
+        } else {
+            $msg = (0 == $comment->parent) ? libs\ShortCut::getTemplate('owner') : libs\ShortCut::getTemplate('guest');
         }
+        $msg = libs\ShortCut::replace($msg, $coid);
 
-        // 构造 Telegram 消息 (Markdown 格式)
-        $msg = $isPending ? ($title . "\n") : ("🎉 " . $title . "\n");
-        $msg .= "评论者: `" . $authorName . "`\n";
-        $msg .= "邮箱: `" . $authorMail . "`\n";
-        if (!empty($authorUrl)) {
-            $msg .= "网站: `" . $authorUrl . "`\n";
-        }
-        $msg .= "评论内容:" . $text;
-        
-        // 构造按钮
-        $keyboard = [
-            'inline_keyboard' => [
-                [
-                    ['text' => $buttonText, 'url' => $buttonUrl]
-                ]
-            ]
-        ];
+        // 构建 inline_keyboard
+        $keyboard = self::buildTelegramKeyboard($coid, $comment->status,$permalink);
 
-        // 发送请求
-        $botToken = $pluginOptions->tgBotToken;
-        $chatId = $pluginOptions->tgChatId;
-        $apiUrl = "https://api.telegram.org/bot" . $botToken . "/sendMessage";
-        
-        $postdata = http_build_query([
+        $post = [
             'chat_id' => $chatId,
             'text' => $msg,
-            'parse_mode' => 'Markdown',
-            'reply_markup' => json_encode($keyboard)
-        ]);
-        
-        $opts = [
+            'parse_mode' => 'HTML',
+            'disable_web_page_preview' => true,
+            'reply_markup' => json_encode(['inline_keyboard' => $keyboard])
+        ];
+
+        $url = "https://api.telegram.org/bot{$token}/sendMessage";
+        $options = [
             'http' => [
-                'method' => 'POST',
-                'header' => 'Content-type: application/x-www-form-urlencoded',
-                'content' => $postdata
+                'header'  => "Content-type: application/x-www-form-urlencoded\r\n",
+                'method'  => 'POST',
+                'content' => http_build_query($post),
+                'timeout' => 10
             ]
         ];
-        $context = stream_context_create($opts);
-        $result = file_get_contents($apiUrl, false, $context);
+        $context = stream_context_create($options);
+        $result = @file_get_contents($url, false, $context);
+        libs\DB::log($coid, 'telegram', ($result === false ? 'Request Failed' : $result) . "\n\n" . $msg);
+        libs\DB::log($coid, 'log', 'Telegram：发送结束');
+    }
+
+    /**
+     * 构建 Telegram 内联键盘
+     *
+     * @param int $coid 评论ID
+     * @param string $status 评论状态
+     * @return array
+     */
+    public static function buildTelegramKeyboard(int $coid, string $status, string $permalink): array
+    {
+        $keyboard = [];
+        $siteUrl = Utils\Helper::options()->siteUrl;
         
-        libs\DB::log($coid, 'telegram', $result . "\n\n" . $msg);
-        libs\DB::log($coid, 'log', 'Telegram：通知结束');
+        if ($status !== 'approved') {
+            // 未审核：显示 通过审核、标记为垃圾、删除评论
+            $keyboard[] = [
+                ['text' => '✓ 通过审核', 'callback_data' => "tg_approve_{$coid}"],
+                ['text' => '⚠️ 标记为垃圾', 'callback_data' => "tg_spam_{$coid}"]
+            ];
+            $keyboard[] = [
+                ['text' => '🗑️ 删除评论', 'callback_data' => "tg_delete_{$coid}"]
+            ];
+        } else {
+            // 已审核：显示 标记为垃圾、删除评论
+            $keyboard[] = [
+                ['text' => '⚠️ 标记为垃圾', 'callback_data' => "tg_spam_{$coid}"],
+                ['text' => '🗑️ 删除评论', 'callback_data' => "tg_delete_{$coid}"]
+            ];
+        }
+        
+        // 添加 查看评论 链接
+        $keyboard[] = [
+            ['text' => '👁️ 查看评论', 'url' => $permalink]
+        ];
+        
+        return $keyboard;
     }
 
     /**
@@ -877,7 +940,7 @@ class Plugin implements PluginInterface
                         $subject = libs\ShortCut::replace($pluginOptions->titleForGuest, $coid);
                         $body = libs\ShortCut::replace(libs\ShortCut::getTemplate('guest'), $coid);
                         $res = self::sendViaGraphApi($parent->mail, $parent->author, $subject, $body, $config);
-                        libs\DB::log($coid, 'mail', "To Parent: " . ($res === true ? "Success" : $res));
+                        libs\DB::log($coid, "To Parent: " . ($res === true ? "Success" : $res));
                         
                         // 给文章作者发送owner模板邮件
                         $post = Utils\Helper::widgetById('contents', $comment->cid);
@@ -885,7 +948,7 @@ class Plugin implements PluginInterface
                         $subjectOwner = libs\ShortCut::replace($pluginOptions->titleForOwner, $coid);
                         $bodyOwner = libs\ShortCut::replace(libs\ShortCut::getTemplate('owner'), $coid);
                         $res2 = self::sendViaGraphApi($post->author->mail, $post->author->name, $subjectOwner, $bodyOwner, $config);
-                        libs\DB::log($coid, 'mail', "To Owner: " . ($res2 === true ? "Success" : $res2));
+                        libs\DB::log($coid, "To Owner: " . ($res2 === true ? "Success" : $res2));
                     } else {
                         // 父评论者就是文章作者：只给他发送owner模板
                         libs\DB::log($coid, 'log', 'MSGraph邮件：子评论：通过审核：游客评论：父评论作者为文章作者');
@@ -894,7 +957,7 @@ class Plugin implements PluginInterface
                         $subject = libs\ShortCut::replace($pluginOptions->titleForOwner, $coid);
                         $body = libs\ShortCut::replace(libs\ShortCut::getTemplate('owner'), $coid);
                         $res = self::sendViaGraphApi($post->author->mail, $post->author->name, $subject, $body, $config);
-                        libs\DB::log($coid, 'mail', "To Owner: " . ($res === true ? "Success" : $res));
+                        libs\DB::log($coid, "To Owner: " . ($res === true ? "Success" : $res));
                     }
                 }
             } elseif ($comment->status == "waiting") {
